@@ -35,6 +35,23 @@ Never provide specific medical advice. Always recommend consulting with healthca
 
 IMPORTANT: Always end your responses with 1-3 suggested follow-up questions or actions the user can take next. Format them naturally in conversation.`;
 
+function sanitizeHistory(history: Array<{ role: string; content: string }>): Array<{ role: string; content: string }> {
+  if (!history || history.length === 0) return [];
+  const sanitized: Array<{ role: string; content: string }> = [];
+  for (const msg of history) {
+    if (msg.role !== 'user' && msg.role !== 'assistant') continue;
+    if (sanitized.length > 0 && sanitized[sanitized.length - 1].role === msg.role) {
+      sanitized[sanitized.length - 1].content += '\n' + msg.content;
+    } else {
+      sanitized.push({ role: msg.role, content: msg.content });
+    }
+  }
+  if (sanitized.length > 0 && sanitized[sanitized.length - 1].role === 'user') {
+    sanitized.pop();
+  }
+  return sanitized;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { message, history, userProfile, phase } = await req.json();
@@ -51,19 +68,13 @@ export async function POST(req: NextRequest) {
       ? `\n\nUser context: ${JSON.stringify(userProfile)}. Current phase: ${phase || 'welcome'}.`
       : '';
 
+    const cleanHistory = sanitizeHistory((history || []).slice(-10));
+
     const messages = [
       { role: 'system', content: SYSTEM_PROMPT + contextMessage },
-      ...(history || []).slice(-10),
+      ...cleanHistory,
       { role: 'user', content: message },
     ];
-
-    const requestBody = {
-      model: 'sonar',
-      messages,
-      temperature: 0.7,
-    };
-
-    console.log('Sending request to Perplexity API:', JSON.stringify({ model: requestBody.model, messageCount: messages.length }));
 
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
@@ -71,7 +82,11 @@ export async function POST(req: NextRequest) {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({
+        model: 'sonar',
+        messages,
+        temperature: 0.7,
+      }),
     });
 
     if (!response.ok) {
@@ -89,7 +104,7 @@ export async function POST(req: NextRequest) {
 
     const chips = extractChips(aiMessage, phase);
     const nextPhase = determinePhase(message, aiMessage, phase, userProfile);
-    const profileUpdate = extractProfileData(message, aiMessage);
+    const profileUpdate = extractProfileData(message);
 
     return NextResponse.json({
       message: aiMessage,
@@ -108,7 +123,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-function extractChips(message: string, phase?: string): string[] {
+function extractChips(_message: string, phase?: string): string[] {
   const defaultChips: Record<string, string[]> = {
     welcome: ['Find plans in my area', 'What is Medicare Advantage?', 'Compare plan types'],
     discovery: ['Search for plans now', 'Add my medications', 'Check my doctors'],
@@ -117,23 +132,20 @@ function extractChips(message: string, phase?: string): string[] {
     deep_dive: ['I want to enroll', 'Compare with another plan', 'Check drug formulary'],
     enrollment: ['Continue enrollment', 'Review my selections', 'Talk to an agent'],
   };
-
   return defaultChips[phase || 'welcome'] || defaultChips.welcome;
 }
 
-function determinePhase(userMsg: string, aiMsg: string, currentPhase?: string, profile?: Record<string, unknown>): string {
+function determinePhase(userMsg: string, _aiMsg: string, currentPhase?: string, _profile?: Record<string, unknown>): string {
   const msg = userMsg.toLowerCase();
-
   if (msg.includes('enroll') || msg.includes('sign up') || msg.includes('apply')) return 'enrollment';
   if (msg.includes('compare') || msg.includes('side by side') || msg.includes('difference')) return 'comparison';
   if (msg.includes('find plan') || msg.includes('search') || msg.includes('show me plans')) return 'plan_search';
   if (msg.includes('zip') || msg.includes('medication') || msg.includes('doctor') || msg.includes('budget')) return 'discovery';
   if (msg.includes('tell me more') || msg.includes('details') || msg.includes('coverage')) return 'deep_dive';
-
   return currentPhase || 'welcome';
 }
 
-function extractProfileData(userMsg: string, _aiMsg: string): Record<string, string> {
+function extractProfileData(userMsg: string): Record<string, string> {
   const profile: Record<string, string> = {};
   const zipMatch = userMsg.match(/\b\d{5}\b/);
   if (zipMatch) profile.zipCode = zipMatch[0];

@@ -15,12 +15,15 @@ const QUICK_STARTS = [
 export function HeroChat() {
   const { messages, isTyping, sendMessage, phase } = useChatStore();
   const [input, setInput] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [showQuickStarts, setShowQuickStarts] = useState(true);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Scroll only the chat container, not the whole page
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
   }, [messages, isTyping]);
 
   const handleSend = async (text?: string) => {
@@ -72,7 +75,7 @@ export function HeroChat() {
           </div>
 
           {/* Messages Area */}
-          <div className="h-[400px] md:h-[450px] overflow-y-auto p-4 md:p-6 space-y-4 bg-gray-50/50">
+          <div ref={chatContainerRef} className="h-[400px] md:h-[450px] overflow-y-auto p-4 md:p-6 space-y-4 bg-gray-50/50">
             {messages.map((msg) => (
               <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
@@ -87,15 +90,17 @@ export function HeroChat() {
                 <div className={`max-w-[80%] ${
                   msg.role === 'user'
                     ? 'bg-blue-600 text-white rounded-2xl rounded-tr-md px-4 py-3'
-                    : 'bg-white border border-gray-100 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm'
+                    : 'bg-white rounded-2xl rounded-tl-md px-4 py-3 shadow-sm border border-gray-100'
                 }`}>
                   <div className={`text-sm leading-relaxed ${msg.role === 'user' ? 'text-white' : 'text-gray-700'}`}>
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
                   </div>
                   {msg.source && msg.role === 'assistant' && (
-                    <div className="mt-2 pt-2 border-t border-gray-100 flex items-center gap-1 text-xs text-gray-400">
-                      <Info className="w-3 h-3" />
-                      {msg.source}
+                    <div className="mt-2 pt-2 border-t border-gray-100">
+                      <p className="text-xs text-gray-400 flex items-center gap-1">
+                        <Info className="w-3 h-3" />
+                        {msg.source}
+                      </p>
                     </div>
                   )}
                   {msg.chips && msg.chips.length > 0 && (
@@ -115,44 +120,40 @@ export function HeroChat() {
                 </div>
               </div>
             ))}
-
             {isTyping && (
               <div className="flex gap-3">
-                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
                   <Bot className="w-4 h-4 text-blue-600" />
                 </div>
-                <div className="bg-white border border-gray-100 rounded-2xl rounded-tl-md px-4 py-3 shadow-sm">
-                  <div className="flex gap-1.5">
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                    <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                <div className="bg-white rounded-2xl rounded-tl-md px-4 py-3 shadow-sm border border-gray-100">
+                  <div className="flex gap-1">
+                    <span className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
+                    <span className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                    <span className="w-2 h-2 bg-gray-300 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
                   </div>
                 </div>
               </div>
             )}
-            <div ref={messagesEndRef} />
           </div>
 
           {/* Quick Start Cards */}
           {showQuickStarts && messages.length <= 1 && (
-            <div className="px-4 md:px-6 py-3 border-t border-gray-100 bg-white">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {QUICK_STARTS.map((qs, i) => (
-                  <button
-                    key={i}
-                    onClick={() => handleSend(qs.prompt)}
-                    className={`flex flex-col items-center gap-2 p-3 rounded-xl border text-center transition-all ${qs.color}`}
-                  >
-                    <qs.icon className="w-5 h-5" />
-                    <span className="text-xs font-medium">{qs.label}</span>
-                  </button>
-                ))}
-              </div>
+            <div className="px-4 py-3 border-t border-gray-100 grid grid-cols-2 md:grid-cols-4 gap-2">
+              {QUICK_STARTS.map((qs, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleSend(qs.prompt)}
+                  className={`flex flex-col items-center gap-2 p-3 rounded-xl border text-center transition-all ${qs.color}`}
+                >
+                  <qs.icon className="w-5 h-5" />
+                  <span className="text-xs font-medium">{qs.label}</span>
+                </button>
+              ))}
             </div>
           )}
 
           {/* Input Area */}
-          <div className="px-4 md:px-6 py-4 border-t border-gray-100 bg-white">
+          <div className="p-3 border-t border-gray-100">
             <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="flex gap-2">
               <input
                 ref={inputRef}
@@ -165,18 +166,18 @@ export function HeroChat() {
               />
               <button
                 type="submit"
-                disabled={!input.trim() || isTyping}
-                className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded-xl px-4 py-3 transition-colors flex items-center gap-2"
+                disabled={isTyping || !input.trim()}
+                className="px-4 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 <Send className="w-4 h-4" />
               </button>
             </form>
-            <div className="mt-2 flex items-center justify-between text-xs text-gray-400">
-              <span className="flex items-center gap-1">
+            <div className="flex justify-between items-center mt-2 px-1">
+              <p className="text-xs text-gray-400 flex items-center gap-1">
                 <Shield className="w-3 h-3" />
                 AI assistant. Not a licensed agent.
-              </span>
-              <a href="tel:18005550199" className="flex items-center gap-1 text-blue-500 hover:text-blue-600">
+              </p>
+              <a href="tel:18005550199" className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1">
                 <Phone className="w-3 h-3" />
                 1-800-555-0199
               </a>

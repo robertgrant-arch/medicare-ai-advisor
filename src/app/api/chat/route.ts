@@ -35,6 +35,27 @@ Never provide specific medical advice. Always recommend consulting with healthca
 
 IMPORTANT: Always end your responses with 1-3 suggested follow-up questions or actions the user can take next. Format them naturally in conversation.`;
 
+// --- Rate limiting (in-memory, resets on cold start) ---
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT = 20;
+const RATE_WINDOW = 60_000;
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_WINDOW });
+    return true;
+  }
+  if (entry.count >= RATE_LIMIT) return false;
+  entry.count++;
+  return true;
+}
+
+// --- Input validation constants ---
+const MAX_MESSAGE_LENGTH = 2000;
+const MAX_HISTORY_MESSAGES = 40;
+
 function sanitizeHistory(history: Array<{ role: string; content: string }>): Array<{ role: string; content: string }> {
   if (!history || history.length === 0) return [];
   const filtered: Array<{ role: string; content: string }> = [];
@@ -58,9 +79,40 @@ function sanitizeHistory(history: Array<{ role: string; content: string }>): Arr
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const { message, history, userProfile, phase } = await req.json();
+  // Rate limiting
+  const ip = req.headers.get('x-forwarded-for') ?? 'unknown';
+  if (!checkRateLimit(ip)) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
+  }
 
+  // Input validation
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+
+  if (!body || typeof body !== 'object') {
+    return NextResponse.json({ error: 'Invalid body' }, { status: 400 });
+  }
+
+  const { message, history, userProfile, phase } = body as {
+    message?: unknown;
+    history?: unknown;
+    userProfile?: Record<string, unknown>;
+    phase?: string;
+  };
+
+  if (typeof message !== 'string' || message.trim().length === 0) {
+    return NextResponse.json({ error: 'Message content required' }, { status: 400 });
+  }
+
+  if (message.length > MAX_MESSAGE_LENGTH) {
+    return NextResponse.json({ error: 'Message too long' }, { status: 400 });
+  }
+
+  try {
     const apiKey = process.env.PERPLEXITY_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
@@ -73,7 +125,9 @@ export async function POST(req: NextRequest) {
       ? `\n\nUser context: ${JSON.stringify(userProfile)}. Current phase: ${phase || 'welcome'}.`
       : '';
 
-    const cleanHistory = sanitizeHistory((history || []).slice(-10));
+    // Trim history before sending
+    const trimmedHistory = Array.isArray(history) ? history.slice(-MAX_HISTORY_MESSAGES) : [];
+    const cleanHistory = sanitizeHistory(trimmedHistory.slice(-10));
 
     const messages = [
       { role: 'system', content: SYSTEM_PROMPT + contextMessage },
@@ -108,7 +162,6 @@ export async function POST(req: NextRequest) {
     const data = await response.json();
     const aiMessage = data.choices?.[0]?.message?.content || 'I apologize, I could not generate a response.';
     const citations = data.citations || [];
-
     const chips = extractChips(phase);
     const nextPhase = determinePhase(message, phase);
     const profileUpdate = extractProfileData(message);

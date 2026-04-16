@@ -37,19 +37,24 @@ IMPORTANT: Always end your responses with 1-3 suggested follow-up questions or a
 
 function sanitizeHistory(history: Array<{ role: string; content: string }>): Array<{ role: string; content: string }> {
   if (!history || history.length === 0) return [];
-  const sanitized: Array<{ role: string; content: string }> = [];
+  const filtered: Array<{ role: string; content: string }> = [];
   for (const msg of history) {
     if (msg.role !== 'user' && msg.role !== 'assistant') continue;
-    if (sanitized.length > 0 && sanitized[sanitized.length - 1].role === msg.role) {
-      sanitized[sanitized.length - 1].content += '\n' + msg.content;
+    if (filtered.length > 0 && filtered[filtered.length - 1].role === msg.role) {
+      filtered[filtered.length - 1].content += '\n' + msg.content;
     } else {
-      sanitized.push({ role: msg.role, content: msg.content });
+      filtered.push({ role: msg.role, content: msg.content });
     }
   }
-  if (sanitized.length > 0 && sanitized[sanitized.length - 1].role === 'user') {
-    sanitized.pop();
+  // Perplexity requires first message after system to be user role
+  while (filtered.length > 0 && filtered[0].role !== 'user') {
+    filtered.shift();
   }
-  return sanitized;
+  // Remove trailing user message since we append the current one
+  if (filtered.length > 0 && filtered[filtered.length - 1].role === 'user') {
+    filtered.pop();
+  }
+  return filtered;
 }
 
 export async function POST(req: NextRequest) {
@@ -75,6 +80,8 @@ export async function POST(req: NextRequest) {
       ...cleanHistory,
       { role: 'user', content: message },
     ];
+
+    console.log('API request messages:', JSON.stringify(messages.map(m => ({ role: m.role, len: m.content.length }))));
 
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
@@ -102,8 +109,8 @@ export async function POST(req: NextRequest) {
     const aiMessage = data.choices?.[0]?.message?.content || 'I apologize, I could not generate a response.';
     const citations = data.citations || [];
 
-    const chips = extractChips(aiMessage, phase);
-    const nextPhase = determinePhase(message, aiMessage, phase, userProfile);
+    const chips = extractChips(phase);
+    const nextPhase = determinePhase(message, phase);
     const profileUpdate = extractProfileData(message);
 
     return NextResponse.json({
@@ -123,7 +130,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-function extractChips(_message: string, phase?: string): string[] {
+function extractChips(phase?: string): string[] {
   const defaultChips: Record<string, string[]> = {
     welcome: ['Find plans in my area', 'What is Medicare Advantage?', 'Compare plan types'],
     discovery: ['Search for plans now', 'Add my medications', 'Check my doctors'],
@@ -135,7 +142,7 @@ function extractChips(_message: string, phase?: string): string[] {
   return defaultChips[phase || 'welcome'] || defaultChips.welcome;
 }
 
-function determinePhase(userMsg: string, _aiMsg: string, currentPhase?: string, _profile?: Record<string, unknown>): string {
+function determinePhase(userMsg: string, currentPhase?: string): string {
   const msg = userMsg.toLowerCase();
   if (msg.includes('enroll') || msg.includes('sign up') || msg.includes('apply')) return 'enrollment';
   if (msg.includes('compare') || msg.includes('side by side') || msg.includes('difference')) return 'comparison';

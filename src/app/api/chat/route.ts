@@ -57,22 +57,26 @@ export async function POST(req: NextRequest) {
       { role: 'user', content: message },
     ];
 
+    const requestBody = {
+      model: 'sonar',
+      messages,
+      temperature: 0.7,
+    };
+
+    console.log('Sending request to Perplexity API:', JSON.stringify({ model: requestBody.model, messageCount: messages.length }));
+
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'sonar',
-        messages,
-        temperature: 0.7,
-        max_tokens: 2048,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
       const err = await response.text();
+      console.error('Perplexity API error:', response.status, err);
       return NextResponse.json(
         { error: `API error: ${response.status}`, details: err },
         { status: response.status }
@@ -113,20 +117,23 @@ function extractChips(message: string, phase?: string): string[] {
     deep_dive: ['I want to enroll', 'Compare with another plan', 'Check drug formulary'],
     enrollment: ['Continue enrollment', 'Review my selections', 'Talk to an agent'],
   };
+
   return defaultChips[phase || 'welcome'] || defaultChips.welcome;
 }
 
 function determinePhase(userMsg: string, aiMsg: string, currentPhase?: string, profile?: Record<string, unknown>): string {
   const msg = userMsg.toLowerCase();
+
   if (msg.includes('enroll') || msg.includes('sign up') || msg.includes('apply')) return 'enrollment';
   if (msg.includes('compare') || msg.includes('side by side') || msg.includes('difference')) return 'comparison';
   if (msg.includes('find plan') || msg.includes('search') || msg.includes('show me plans')) return 'plan_search';
   if (msg.includes('zip') || msg.includes('medication') || msg.includes('doctor') || msg.includes('budget')) return 'discovery';
   if (msg.includes('tell me more') || msg.includes('details') || msg.includes('coverage')) return 'deep_dive';
+
   return currentPhase || 'welcome';
 }
 
-function extractProfileData(userMsg: string, aiMsg: string): Record<string, string> {
+function extractProfileData(userMsg: string, _aiMsg: string): Record<string, string> {
   const profile: Record<string, string> = {};
   const zipMatch = userMsg.match(/\b\d{5}\b/);
   if (zipMatch) profile.zipCode = zipMatch[0];

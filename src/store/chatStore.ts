@@ -7,8 +7,6 @@ export interface Message {
   content: string;
   source?: string;
   chips?: string[];
-  planCards?: PlanCard[];
-  enrollmentForm?: boolean;
   timestamp: number;
 }
 
@@ -37,7 +35,7 @@ export interface UserProfile {
   currentCoverage: string;
 }
 
-export type ConversationPhase = 
+export type ConversationPhase =
   | 'welcome'
   | 'discovery'
   | 'plan_search'
@@ -64,17 +62,20 @@ interface ChatState {
   reset: () => void;
 }
 
-const INITIAL_MESSAGE: Message = {
+const MAX_STORED_MESSAGES = 100;
+const MAX_HISTORY_TO_API = 40;
+
+const createInitialMessage = (): Message => ({
   id: '1',
   role: 'assistant',
   content: "Hi! I'm your Medicare AI Advisor. I'll help you find the best Medicare Advantage plan for your needs. I use real CMS data and carrier information to give you accurate, transparent recommendations.\n\nWhat would you like to explore?",
   source: 'System',
   chips: ['Find plans near me', 'Compare plan benefits', 'Check my medications', 'Understand Medicare basics'],
   timestamp: Date.now(),
-};
+});
 
 export const useChatStore = create<ChatState>((set, get) => ({
-  messages: [INITIAL_MESSAGE],
+  messages: [createInitialMessage()],
   isTyping: false,
   phase: 'welcome',
   userProfile: {},
@@ -83,7 +84,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionId: uuidv4(),
 
   addMessage: (msg) => set((state) => ({
-    messages: [...state.messages, { ...msg, id: uuidv4(), timestamp: Date.now() }],
+    messages: [...state.messages, { ...msg, id: uuidv4(), timestamp: Date.now() }].slice(-MAX_STORED_MESSAGES),
   })),
 
   setIsTyping: (v) => set({ isTyping: v }),
@@ -95,10 +96,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setEnrollingPlan: (plan) => set({ enrollingPlan: plan }),
 
   sendMessage: async (text: string) => {
-    const { addMessage, setIsTyping, messages } = get();
+    const { addMessage, setIsTyping } = get();
     if (!text.trim()) return;
 
-    addMessage({ role: 'user', content: text });
+    // Build user message
+    const userMsg: Omit<Message, 'id' | 'timestamp'> = { role: 'user', content: text };
+
+    // Build history BEFORE mutating state, include the new user message
+    const history = [...get().messages.map(m => ({ role: m.role, content: m.content })), { role: 'user', content: text }].slice(-MAX_HISTORY_TO_API);
+
+    addMessage(userMsg);
     setIsTyping(true);
 
     try {
@@ -107,12 +114,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: text,
-          history: messages.map(m => ({ role: m.role, content: m.content })),
+          history,
           userProfile: get().userProfile,
           phase: get().phase,
         }),
       });
-
       const data = await res.json();
 
       if (data.error) {
@@ -127,10 +133,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           content: data.message,
           source: data.source || 'Perplexity AI',
           chips: data.chips,
-          planCards: data.planCards,
-          enrollmentForm: data.enrollmentForm,
         });
-
         if (data.profileUpdate) {
           get().updateProfile(data.profileUpdate);
         }
@@ -144,7 +147,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } catch (err) {
       addMessage({
         role: 'assistant',
-        content: 'I\'m having trouble connecting right now. Please try again in a moment.',
+        content: "I'm having trouble connecting right now. Please try again in a moment.",
         source: 'System',
       });
     } finally {
@@ -153,7 +156,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   reset: () => set({
-    messages: [INITIAL_MESSAGE],
+    messages: [createInitialMessage()],
     isTyping: false,
     phase: 'welcome',
     userProfile: {},

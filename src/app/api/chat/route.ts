@@ -1,39 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const SYSTEM_PROMPT = `You are Medicare AI Advisor, a friendly and knowledgeable Medicare expert. Your role is to help seniors and their families understand Medicare Advantage plans and guide them toward enrollment.
+const SYSTEM_PROMPT = `You are Medicare AI Advisor, a licensed-agent-supporting sales assistant for Medicare Advantage plans.
 
-You are conversational, warm, and patient. You speak in clear, simple language. You always cite your data sources.
+YOUR GOAL (in order):
+1) Qualify the user quickly (ZIP, doctors, prescriptions, budget).
+2) Recommend ONE best-fit Medicare Advantage plan (2 max).
+3) Close: get them to start enrollment online or connect with a licensed agent at 1-800-555-0199.
 
-KEY BEHAVIORS:
-- Ask clarifying questions about ZIP code, current medications, preferred doctors, and budget
-- Explain plan differences clearly using simple language
-- Compare plans side-by-side when asked
-- Proactively guide users toward enrollment when they show interest
-- Always mention that you pull data from CMS (Centers for Medicare & Medicaid Services)
-- Be warm, patient, and reassuring
-- If unsure, recommend speaking with a licensed agent at 1-800-555-0199
-- When discussing plans, mention specific benefits like dental, vision, fitness, drug coverage
-- Use conversational tone - this should feel like talking to a knowledgeable friend
-
-DATA SOURCES YOU REFERENCE:
-- CMS Medicare Plan Finder (medicare.gov) - official plan data
-- CMS Star Ratings from Quality data
-- Formulary data from plan sponsors
-- Provider network directories
-- CMS Annual Notice of Changes (ANOC)
+STYLE RULES (strict):
+- Keep every reply SHORT: max 3 short paragraphs OR 5 bullets. No walls of text.
+- Plain, warm, human language. Talk like a trusted friend who sells Medicare.
+- Never list data sources, citations, star-rating methodology, or carrier rosters in chat.
+- Do NOT teach Medicare 101 unless the user explicitly asks.
+- Never recommend more than 2 plans at once.
+- Every reply ends with ONE clear next step (a question or a call-to-action), not a menu.
+- No emojis unless the user uses them first.
 
 CONVERSATION FLOW:
-1. Welcome & Discovery: Learn about the user (ZIP, needs, medications, doctors, budget)
-2. Plan Search: Search and present relevant plans based on their profile
-3. Comparison: Help compare 2-3 plans side by side
-4. Deep Dive: Answer specific questions about coverage, costs, networks
-5. Enrollment: Guide through the enrollment process step by step
+1. Opening: If you don't have the ZIP yet, ask for it. Nothing else.
+2. Discovery: Once you have ZIP, ask in ONE message about (a) main doctor/clinic, (b) prescriptions, (c) monthly budget comfort.
+3. Recommend: Present ONE best-fit plan in this shape:
+   - Plan name - the single benefit that matches their top need
+   - $X/mo premium, $Y out-of-pocket max
+   - Covers their doctor / drug
+   Then ask: "Want to start enrollment on this plan, or see one backup to compare?"
+4. Close: If they show any interest, move them toward enrollment or a licensed agent. Do not re-explain.
 
-When you have enough information to suggest plans, include suggested follow-up questions as chips.
+SAFETY:
+- Never give medical advice.
+- If the user asks something you don't know, offer to connect them with a licensed agent at 1-800-555-0199.
 
-Never provide specific medical advice. Always recommend consulting with healthcare providers for medical decisions.
-
-IMPORTANT: Always end your responses with 1-3 suggested follow-up questions or actions the user can take next. Format them naturally in conversation.`;
+REMEMBER: You are selling. Be confident, concise, and always moving toward the next step.`;
 
 // --- Rate limiting (in-memory, resets on cold start) ---
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -67,11 +64,9 @@ function sanitizeHistory(history: Array<{ role: string; content: string }>): Arr
       filtered.push({ role: msg.role, content: msg.content });
     }
   }
-  // Perplexity requires first message after system to be user role
   while (filtered.length > 0 && filtered[0].role !== 'user') {
     filtered.shift();
   }
-  // Remove trailing user message since we append the current one
   if (filtered.length > 0 && filtered[filtered.length - 1].role === 'user') {
     filtered.pop();
   }
@@ -79,20 +74,17 @@ function sanitizeHistory(history: Array<{ role: string; content: string }>): Arr
 }
 
 export async function POST(req: NextRequest) {
-  // Rate limiting
   const ip = req.headers.get('x-forwarded-for') ?? 'unknown';
   if (!checkRateLimit(ip)) {
     return NextResponse.json({ error: 'Too many requests' }, { status: 429 });
   }
 
-  // Input validation
   let body: unknown;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
-
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'Invalid body' }, { status: 400 });
   }
@@ -107,7 +99,6 @@ export async function POST(req: NextRequest) {
   if (typeof message !== 'string' || message.trim().length === 0) {
     return NextResponse.json({ error: 'Message content required' }, { status: 400 });
   }
-
   if (message.length > MAX_MESSAGE_LENGTH) {
     return NextResponse.json({ error: 'Message too long' }, { status: 400 });
   }
@@ -115,27 +106,21 @@ export async function POST(req: NextRequest) {
   try {
     const apiKey = process.env.PERPLEXITY_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: 'API key not configured' },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
     }
 
     const contextMessage = userProfile && Object.keys(userProfile).length > 0
       ? `\n\nUser context: ${JSON.stringify(userProfile)}. Current phase: ${phase || 'welcome'}.`
       : '';
 
-    // Trim history before sending
     const trimmedHistory = Array.isArray(history) ? history.slice(-MAX_HISTORY_MESSAGES) : [];
-    const cleanHistory = sanitizeHistory(trimmedHistory.slice(-10));
+    const cleanHistory = sanitizeHistory(trimmedHistory.slice(-10) as Array<{ role: string; content: string }>);
 
     const messages = [
       { role: 'system', content: SYSTEM_PROMPT + contextMessage },
       ...cleanHistory,
       { role: 'user', content: message },
     ];
-
-    console.log('API request messages:', JSON.stringify(messages.map(m => ({ role: m.role, len: m.content.length }))));
 
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
@@ -161,36 +146,32 @@ export async function POST(req: NextRequest) {
 
     const data = await response.json();
     const aiMessage = data.choices?.[0]?.message?.content || 'I apologize, I could not generate a response.';
-    const citations = data.citations || [];
+
     const chips = extractChips(phase);
     const nextPhase = determinePhase(message, phase);
     const profileUpdate = extractProfileData(message);
 
     return NextResponse.json({
       message: aiMessage,
-      source: citations.length > 0 ? `Sources: ${citations.slice(0, 3).join(', ')}` : 'Perplexity AI + CMS Data',
+      source: 'Medicare AI Advisor',
       chips,
       phase: nextPhase,
       profileUpdate: Object.keys(profileUpdate).length > 0 ? profileUpdate : undefined,
-      citations,
     });
   } catch (error) {
     console.error('Chat API error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
 function extractChips(phase?: string): string[] {
   const defaultChips: Record<string, string[]> = {
-    welcome: ['Find plans in my area', 'What is Medicare Advantage?', 'Compare plan types'],
-    discovery: ['Search for plans now', 'Add my medications', 'Check my doctors'],
-    plan_search: ['Compare top 3 plans', 'Show me $0 premium plans', 'Which has best drug coverage?'],
-    comparison: ['Tell me more about this plan', 'Start enrollment', 'Check provider network'],
-    deep_dive: ['I want to enroll', 'Compare with another plan', 'Check drug formulary'],
-    enrollment: ['Continue enrollment', 'Review my selections', 'Talk to an agent'],
+    welcome: ['Find plans in my area', 'I know my ZIP'],
+    discovery: ['Show my best plan', 'I take prescriptions', 'I have a preferred doctor'],
+    plan_search: ['Show my best match', 'Compare 2 plans'],
+    comparison: ['Start enrollment', 'Talk to an agent'],
+    deep_dive: ['Start enrollment', 'Talk to an agent'],
+    enrollment: ['Continue enrollment', 'Talk to an agent'],
   };
   return defaultChips[phase || 'welcome'] || defaultChips.welcome;
 }

@@ -11,6 +11,7 @@ STYLE RULES (strict):
 - Keep every reply SHORT: max 3 short paragraphs OR 5 bullets. No walls of text.
 - Plain, warm, human language. Talk like a trusted friend who sells Medicare.
 - Never list data sources, citations, star-rating methodology, or carrier rosters in chat.
+- Never include bracketed reference markers like [1] or [2][3] in your reply. Speak naturally.
 - Do NOT teach Medicare 101 unless the user explicitly asks.
 - Never recommend more than 2 plans at once.
 - Every reply ends with ONE clear next step (a question or a call-to-action), not a menu.
@@ -71,6 +72,15 @@ function sanitizeHistory(history: Array<{ role: string; content: string }>): Arr
     filtered.pop();
   }
   return filtered;
+}
+
+// Strip bracketed citation markers like [1], [1][3], [12] from model output
+function stripCitations(text: string): string {
+  return text
+    .replace(/\s*\[\d+\](?:\s*\[\d+\])*/g, '')
+    .replace(/\s+([.,;:!?])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 export async function POST(req: NextRequest) {
@@ -145,7 +155,8 @@ export async function POST(req: NextRequest) {
     }
 
     const data = await response.json();
-    const aiMessage = data.choices?.[0]?.message?.content || 'I apologize, I could not generate a response.';
+    const rawMessage = data.choices?.[0]?.message?.content || 'I apologize, I could not generate a response.';
+    const aiMessage = stripCitations(rawMessage);
 
     const chips = extractChips(phase);
     const nextPhase = determinePhase(message, phase);

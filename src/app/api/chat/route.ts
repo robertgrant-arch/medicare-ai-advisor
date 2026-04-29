@@ -33,6 +33,21 @@ SAFETY:
 
 REMEMBER: You are selling. Be confident, concise, and always moving toward the next step.`;
 
+// --- Coverage workflow (PR 2, gated by NEXT_PUBLIC_COVERAGE_CHIPS) ---
+const COVERAGE_FLOW_ENABLED = process.env.NEXT_PUBLIC_COVERAGE_CHIPS === '1';
+
+const COVERAGE_FLOW_INSTRUCTIONS = `
+
+COVERAGE WORKFLOW (override step 2 of CONVERSATION FLOW):
+2a. Once you have the ZIP, do NOT ask for doctor + prescriptions + budget all at once. Instead ask: "What do you want to check first — your doctors, your prescriptions, both, or just see plans?" Keep it warm and one sentence.
+2b. If the user picks doctors: ask for one doctor name at a time. Confirm specialty/clinic if ambiguous. After each, ask if they want to add another or move on.
+2c. If the user picks prescriptions: ask for one drug name at a time. Confirm strength/form if ambiguous. After each, ask if they want to add another or move on.
+2d. If the user picks both: do doctors first, then prescriptions, using the same one-at-a-time pattern.
+2e. If the user picks plans first: skip ahead to step 3 and recommend, but offer to verify doctors/prescriptions on whatever plan they like.
+2f. Only ask about budget AFTER doctors and/or prescriptions are captured (or skipped). Keep it as one short question.
+`;
+
+
 // --- Rate limiting (in-memory, resets on cold start) ---
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT = 20;
@@ -127,8 +142,8 @@ export async function POST(req: NextRequest) {
     const cleanHistory = sanitizeHistory(trimmedHistory.slice(-10) as Array<{ role: string; content: string }>);
 
     const messages = [
-      { role: 'system', content: SYSTEM_PROMPT + contextMessage },
-      ...cleanHistory,
+    { role: 'system', content: SYSTEM_PROMPT + (COVERAGE_FLOW_ENABLED ? COVERAGE_FLOW_INSTRUCTIONS : '') + contextMessage },   
+       ...cleanHistory,
       { role: 'user', content: message },
     ];
 
@@ -184,6 +199,10 @@ function extractChips(phase?: string): string[] {
     deep_dive: ['Start enrollment', 'Talk to an agent'],
     enrollment: ['Continue enrollment', 'Talk to an agent'],
   };
+  if (COVERAGE_FLOW_ENABLED && (phase === 'discovery' || phase === 'welcome')) {
+    if (phase === 'welcome') return ['Find plans in my area', 'I know my ZIP'];
+    return ['My doctors', 'My prescriptions', 'Both', 'Just show plans first'];
+  }
   return defaultChips[phase || 'welcome'] || defaultChips.welcome;
 }
 
